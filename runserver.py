@@ -1,3 +1,4 @@
+# 앱 실행부 runserver.py
 from flask import Flask
 from app import app
 

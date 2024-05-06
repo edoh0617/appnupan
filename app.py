@@ -199,3 +199,70 @@ def get_stores():
     except pymysql.MySQLError as e:
         print(f"Query failed: {e}")
         return jsonify({"error": "Query failed"}), 500
+
+
+@app.route('/store/regist', methods=['POST'])
+def store_regist():
+    # JSON 데이터에서 storename, address, contact 정보 추출
+    data = request.get_json()
+    storename = data.get('storename')
+    address = data.get('address')
+    contact = data.get('contact')
+    
+    # 데이터베이스 연결
+    conn = dbcon()
+    if conn is None:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        with conn.cursor() as cursor:
+            # SQL 쿼리 실행
+            sql = """
+            INSERT INTO pendingstores (storename, address, contact, memo, status)
+            VALUES (%s, %s, %s, NULL, NULL)
+            """
+            cursor.execute(sql, (storename, address, contact))
+            conn.commit()
+        
+        return jsonify({"success": "Store added successfully"}), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+    finally:
+        # 데이터베이스 연결 해제
+        dbclose(conn)
+
+
+@app.route('/store/confirm', methods=['POST'])
+def store_confirm():
+    # JSON 데이터에서 storename, address, contact 정보 추출
+    data = request.get_json()
+    storename = data.get('storename')
+    address = data.get('address')
+    contact = data.get('contact')
+    
+    # 데이터베이스 연결
+    conn = dbcon()
+    if conn is None:
+        return jsonify({"error": "Database connection failed"}), 500
+    
+    try:
+        with conn.cursor() as cursor:
+            # SQL 쿼리 실행
+            sql = """
+            INSERT INTO stores (storename, address, contact, memo, status)
+            VALUES (%s, %s, %s, NULL, NULL)
+            """
+            cursor.execute(sql, (storename, address, contact))
+            conn.commit()
+        
+        return jsonify({"success": "Store added successfully"}), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+    finally:
+        # 데이터베이스 연결 해제
+        dbclose(conn)
+
