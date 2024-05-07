@@ -2,15 +2,21 @@
 from flask  import Flask, jsonify, request
 from flask_cors import CORS
 from flask_bcrypt import Bcrypt
+from werkzeug.utils import secure_filename
 
+import os
+import uuid
 import pymysql
+
 from dbconn import dbcon, dbclose
 from regist_model import Registration
+
 
 app = Flask(__name__)
 CORS(app)
 # Bcrypt 인스턴스 초기화
 bcrypt = Bcrypt(app)
+
 
 # user 회원가입 라우트
 @app.route('/user/register', methods=['POST', 'GET'])
@@ -105,6 +111,7 @@ def owner_register():
     return jsonify({'message': response}), 201
 
 
+# 점주 로그인 라우트
 @app.route('/owner/login', methods=['POST'])
 def owner_login():
     ownerid = request.json.get('ownerid')
@@ -141,6 +148,7 @@ def owner_login():
         dbclose(conn)
 
 
+# 내가 들렀던 가게의 메뉴 불러오는 라우트(하드코딩)
 @app.route('/store/11111/menu', methods=['GET'])
 def get_menu():
     # 데이터베이스 연결
@@ -153,7 +161,7 @@ def get_menu():
         cursor = conn.cursor(pymysql.cursors.DictCursor)  # 결과를 딕셔너리 형태로 받기 위한 설정
 
         # SQL 쿼리 실행
-        query = "SELECT * FROM storemenu"
+        query = "SELECT * FROM storemenu WHERE storeid="
         cursor.execute(query)
 
         # 모든 데이터를 변수에 저장
@@ -170,7 +178,8 @@ def get_menu():
         print(f"Query failed: {e}")
         return jsonify({"error": "Query failed"}), 500
         
-        
+
+# 내가 들렀던 가게 호출 (하드코딩)
 @app.route('/store/11111', methods=['GET'])
 def get_stores():
     # 데이터베이스 연결
@@ -201,68 +210,268 @@ def get_stores():
         return jsonify({"error": "Query failed"}), 500
 
 
+# 점주가 처음 가맹점 신청을 하는 라우트
 @app.route('/store/regist', methods=['POST'])
 def store_regist():
-    # JSON 데이터에서 storename, address, contact 정보 추출
     data = request.get_json()
     storename = data.get('storename')
     address = data.get('address')
     contact = data.get('contact')
-    
-    # 데이터베이스 연결
+    ownerid = data.get('ownerid')
+
     conn = dbcon()
     if conn is None:
         return jsonify({"error": "Database connection failed"}), 500
-    
+
     try:
         with conn.cursor() as cursor:
-            # SQL 쿼리 실행
             sql = """
-            INSERT INTO pendingstores (storename, address, contact, memo, status)
-            VALUES (%s, %s, %s, NULL, NULL)
+            INSERT INTO pendingstores (storename, address, contact, ownerid, memo, status)
+            VALUES (%s, %s, %s, %s, NULL, NULL)
             """
-            cursor.execute(sql, (storename, address, contact))
+            cursor.execute(sql, (storename, address, contact, ownerid))
             conn.commit()
-        
+
         return jsonify({"success": "Store added successfully"}), 200
-    
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
+
     finally:
-        # 데이터베이스 연결 해제
         dbclose(conn)
 
 
+# 승인 여부를 기다리는 모든 가게 정보를 호출하는 라우트
+@app.route('/store', methods=['GET'])
+def get_pendingstores():
+    # DB 연결
+    conn = dbcon()
+    if conn is None:
+        return jsonify({'error': 'Database connection failed'}), 500
+
+    try:
+        with conn.cursor() as cursor:
+            # status가 NULL인 pendingstores에서 데이터 조회
+            sql = """
+            SELECT tempstoreid, ownerid, storename, address, contact
+            FROM pendingstores
+            WHERE status IS NULL
+            """
+            cursor.execute(sql)
+            results = cursor.fetchall()
+            
+            # 결과가 없는 경우
+            if not results:
+                return jsonify({'error': 'No pending stores found'}), 404
+            
+            # 결과를 JSON 형식으로 변환
+            pending_stores = []
+            for result in results:
+                tempstoreid, ownerid, storename, address, contact = result
+                pending_stores.append({
+                    'tempstoreid': tempstoreid,
+                    'ownerid': ownerid,
+                    'storename': storename,
+                    'address': address,
+                    'contact': contact
+                })
+
+            return jsonify({'pendingStores': pending_stores}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        # DB 연결 종료
+        dbclose(conn)
+
+
+# 가맹점 신청 승락하는 라우트
 @app.route('/store/confirm', methods=['POST'])
 def store_confirm():
-    # JSON 데이터에서 storename, address, contact 정보 추출
+    # JSON 데이터로부터 tempstoreid 받아오기
     data = request.get_json()
+    tempstore_id = data['tempstoreid']
+    
+    # DB 연결
+    conn = dbcon()
+    if conn is None:
+        return jsonify({'error': 'Database connection failed'}), 500
+
+    try:
+        with conn.cursor() as cursor:
+            # pendingstores에서 승인되지 않은 데이터 조회
+            sql = """
+            SELECT ownerid, storename, address, contact
+            FROM pendingstores
+            WHERE tempstoreid = %s AND status IS NULL
+            """
+            cursor.execute(sql, (tempstore_id,))
+            result = cursor.fetchone()
+            if result:
+                ownerid, storename, address, contact = result
+
+                # storeid로 사용할 랜덤 UID 생성
+                storeid = str(uuid.uuid4())
+
+                # stores 테이블에 데이터 저장
+                insert_sql = """
+                INSERT INTO stores (storeid, ownerid, storename, address, storecontact)
+                VALUES (%s, %s, %s, %s, %s)
+                """
+                cursor.execute(insert_sql, (storeid, ownerid, storename, address, contact))
+                
+                # pendingstores 테이블의 status 업데이트
+                update_sql = """
+                UPDATE pendingstores
+                SET status = 1
+                WHERE tempstoreid = %s
+                """
+                cursor.execute(update_sql, (tempstore_id,))
+                
+                conn.commit()
+
+                return jsonify({'success': 'Store confirmed', 'storeid': storeid}), 200
+            else:
+                return jsonify({'error': 'No data found with provided tempstoreid or already processed'}), 404
+    
+    except pymysql.MySQLError as e:
+        print(f"SQL Error: {e}")
+        return jsonify({'error': str(e)}), 500
+    
+    finally:
+        # DB 연결 종료
+        dbclose(conn)
+
+
+# 가맹점 신청거부하는 라우트
+@app.route('/store/deny', methods=['PUT'])
+def store_deny():
+    # JSON 데이터로부터 tempstoreid 받아오기
+    data = request.get_json()
+    tempstore_id = data['tempstoreid']
+    
+    # DB 연결
+    conn = dbcon()
+    if conn is None:
+        return jsonify({'error': 'Database connection failed'}), 500
+
+    try:
+        with conn.cursor() as cursor:
+            # pendingstores 테이블의 status를 0으로 업데이트
+            update_sql = """
+            UPDATE pendingstores
+            SET status = 0
+            WHERE tempstoreid = %s AND status IS NULL
+            """
+            affected_rows = cursor.execute(update_sql, (tempstore_id,))
+            conn.commit()
+
+            if affected_rows == 0:
+                # 해당 ID가 이미 처리되었거나 존재하지 않는 경우
+                return jsonify({'error': 'No pending store found with provided tempstoreid or already processed'}), 404
+            return jsonify({'success': 'Store application has been denied'}), 200
+    except pymysql.MySQLError as e:
+        print(f"SQL Error: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        # DB 연결 종료
+        dbclose(conn)
+
+
+
+# 가게 메뉴 등록하는 라우트
+# 멀티파트/폼으로 보내기
+@app.route('/store/<string:storeid>/menu', methods=['POST'])
+def storemenu_post(storeid):
+    # form-data로부터 정보 가져오기
+    storeid = request.values.get('storeid')
+    productname = request.values.get('productname')
+    storename = request.values.get('storename')
+    price = request.values.get('price')
+    category = request.values.get('category')
+    menuimage = request.files.get('menuimage')
+
+    if not menuimage:
+        return jsonify({'error': 'No image provided'}), 400
+
+    # 이미지 파일을 안전하게 저장하기 위한 파일명 생성
+    filename = secure_filename(menuimage.filename)
+    
+    # 임시 저장 경로 설정
+    temp_path = os.path.join('/home/ubuntu/appnupan/tmp', filename)
+    os.makedirs(os.path.dirname(temp_path), exist_ok=True)
+    menuimage.save(temp_path)
+
+    # 파일을 열어 BLOB으로 데이터베이스에 저장
+    with open(temp_path, 'rb') as file:
+        binary_data = file.read()
+
+    # DB 연결
+    conn = dbcon()
+    if conn is None:
+        return jsonify({'error': 'Database connection failed'}), 500
+
+    try:
+        with conn.cursor() as cursor:
+            # storemenu 테이블에 데이터 삽입
+            sql = """
+            INSERT INTO storemenu (storeid, productname, storename, price, menuimage, category)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """
+            cursor.execute(sql, (storeid, productname, storename, price, binary_data, category))
+            conn.commit()
+
+            return jsonify({'success': 'Menu item added successfully'}), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        # 임시 파일 삭제
+        os.remove(temp_path)
+        # DB 연결 종료
+        dbclose(conn)
+
+
+@app.route('/united/register', methods=['POST'])
+def united_register():
+    data = request.get_json()
+    ownerID = data.get('ownerid')
+    password = data.get('password')
+    ownerName = data.get('ownername')
+    ownerContact = data.get('ownercontact')
     storename = data.get('storename')
     address = data.get('address')
     contact = data.get('contact')
+
+    # 인자값이 누락되었을 경우 검증
+    if not all([ownerID, password, ownerName, ownerContact, storename, address, contact]):
+        return jsonify({'error': 'Missing fields'}), 400
     
     # 데이터베이스 연결
     conn = dbcon()
     if conn is None:
         return jsonify({"error": "Database connection failed"}), 500
-    
+
     try:
         with conn.cursor() as cursor:
-            # SQL 쿼리 실행
-            sql = """
-            INSERT INTO stores (storename, address, contact, memo, status)
-            VALUES (%s, %s, %s, NULL, NULL)
+            # 가게주인 회원가입 처리
+            registration_response = Registration.register(bcrypt, ownerID, password, ownerName, ownerContact, 'owners')
+
+            # 가맹점 등록 처리
+            store_sql = """
+            INSERT INTO pendingstores (storename, address, contact, ownerid, memo, status)
+            VALUES (%s, %s, %s, %s, NULL, NULL)
             """
-            cursor.execute(sql, (storename, address, contact))
+            cursor.execute(store_sql, (storename, address, contact, ownerID))
             conn.commit()
-        
-        return jsonify({"success": "Store added successfully"}), 200
-    
+
+        return jsonify({
+            "message": "Owner registered and store added successfully",
+            "registration_response": registration_response
+        }), 200
+
     except Exception as e:
+        conn.rollback()  # 롤백 처리
         return jsonify({"error": str(e)}), 500
-    
+
     finally:
-        # 데이터베이스 연결 해제
         dbclose(conn)
 

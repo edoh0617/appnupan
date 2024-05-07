@@ -1,1 +1,6 @@
+# Python 가상 환경 폴더 무시
 anp/
+__pycache__/
+
+# dbconn.py 파일 무시
+dbconn.py
