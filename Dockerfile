@@ -17,6 +17,9 @@ RUN apt-get install -y nginx
 # Gunicorn 설치
 RUN apt-get install -y gunicorn
 
+# mysqlclient 빌드를 위해 필요
+RUN apt-get install -y libmysqlclient-dev pkg-config  
+
 # 기타 패키지 관리 명령 (옵션)
 RUN apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -45,6 +48,10 @@ RUN echo "daemon off;" >> /etc/nginx/nginx.conf
 
 # 애플리케이션 실행 포트 열기
 EXPOSE 80
+
+# 환경 변수 파일 로드
+ENV ENCRYPTION_KEY_FILE=/home/ubuntu/appnupan/.env
+RUN echo "source $ENCRYPTION_KEY_FILE" >> /etc/profile
 
 # Nginx와 Gunicorn을 시작하는 CMD 설정
 CMD service nginx start && gunicorn --workers 3 --bind 0.0.0.0:8000 runserver:app

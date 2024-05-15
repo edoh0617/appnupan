@@ -4,3 +4,15 @@ __pycache__/
 
 # dbconn.py 파일 무시
 dbconn.py
+
+# Dockerfile 파일 무시
+Dockerfile
+
+# nginx.conf 파일 무시
+nginx.conf
+
+# .env 파일 무시
+.env
+
+# practice.py 파일 무시
+practice.py
