@@ -116,7 +116,7 @@ def check_ownerid():
         cur.execute("SELECT ownerid FROM owners WHERE ownerid = %s", (ownerID,))
 
         if cur.fetchone():
-            return jsonify({'message': 'This ownerid is already taken'}), 409
+            return jsonify({'message': 'This ownerid is already taken'}), 200
         
         else:
             return jsonify({'message': 'This ownerid is available'}), 200

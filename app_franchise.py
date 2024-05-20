@@ -1,6 +1,7 @@
 # 가맹점 신청과 관련한 라우트들을 모아둔 app_franchise.py
 import uuid
 import pymysql
+from flask_cors import CORS
 from flask import Blueprint, jsonify, request
 from marshmallow import Schema, fields, validate, ValidationError
 
@@ -8,11 +9,12 @@ from dbconn import dbcon, dbclose
 
 
 app_franchise = Blueprint('franchise', __name__)
+CORS(app_franchise)
 
 
 # 마쉬멜로 스키마 정의
 class PendingstoresSchema(Schema):
-    tempstoreid = fields.Int(dump_only=True)
+    tempstoreid = fields.Int(dump_only=True)  # tempstoreid는 읽기 전용
     storename = fields.Str(required=True, validate=validate.Length(max=200))
     address = fields.Str(validate=validate.Length(max=200))
     contact = fields.Str(validate=validate.Length(max=50))
@@ -45,11 +47,11 @@ def store_regist():
     ownerid = validated_data['ownerid']
     
     # 선택사항
-    address = validated_data.get('address')
-    contact = validated_data.get('contact')
-    businessnumber = validated_data.get('businessnumber')
-    businessdate = validated_data.get('businessdate')
-    bossname = validated_data.get('bossname')
+    address = validated_data.get('address', None)
+    contact = validated_data.get('contact', None)
+    businessnumber = validated_data.get('businessnumber', None)
+    businessdate = validated_data.get('businessdate', None)
+    bossname = validated_data.get('bossname', None)
 
     conn = dbcon()
     if conn is None:
