@@ -1,8 +1,8 @@
-# 가게의 메뉴와 QR코드를 저장하고 조회하는 라우트들을 모아둔 app_store.py
 import os
 import pymysql
+import qrcode
 from flask_cors import CORS
-from flask import Blueprint, jsonify, request
+from flask import Flask, Blueprint, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 from marshmallow import Schema, fields, validate
 
@@ -41,6 +41,7 @@ storemenus_schema = StoremenuSchema(many=True)
 # 파일 확장자 확인 함수
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
 
 ELASTIC_IP = "43.201.92.62"
 
@@ -109,10 +110,8 @@ def storemenu_get(ownerid):
                 return jsonify({'error': 'No menu items found for the given storeid'}), 404
 
             return jsonify({'menu': results}), 200
-
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
     finally:
         dbclose(conn)
 
@@ -121,24 +120,46 @@ def storemenu_get(ownerid):
 class StoretableSchema(Schema):
     tableid = fields.Int(dump_only=True)
     storeid = fields.Str(validate=validate.Length(max=100))
-    tablenumber = fields.Str(validate=validate.Length(max=100))
-    qr_code = fields.Str(validate=validate.Length(max=255))
+    tablenumber = fields.Int(validate=validate.Range(min=1))
+    qr_path = fields.Str(validate=validate.Length(max=255))
 
 
 # 가게좌석마다 QR코드 생성을 위한 스키마 객체 생성
 storetable_schema = StoretableSchema()
-# 복수의 가게 QR코드들을 담기 위한 스키마 객체 생성
 storetables_schema = StoretableSchema(many=True)
+
+
+def generate_qr_code(ownerid, tablenumber):
+    qr_data = f"{ownerid}-{tablenumber}"
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(qr_data)
+    qr.make(fit=True)
+
+    img = qr.make_image(fill='black', back_color='white')
+    directory = '/home/ubuntu/appnupan/QR'
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    
+    filename = f'{ownerid}_{tablenumber}.png'
+    file_path = os.path.join(directory, filename)
+    img.save(file_path)
+    
+    return file_path  # 파일 경로만 반환
 
 
 # 좌석마다 qr코드 저장
 @app_store.route('/<string:ownerid>/qr', methods=['POST'])
 def qr_post(ownerid):
     data = request.json
-    qr_codes = data.get('qr_codes')
+    table_count = data.get('table_count')
 
-    if not qr_codes or not isinstance(qr_codes, list):
-        return jsonify({'error': 'QR codes must be a list'}), 400
+    if not table_count or not isinstance(table_count, int):
+        return jsonify({'error': 'Table count must be an integer'}), 400
 
     conn = dbcon()
     if conn is None:
@@ -146,28 +167,32 @@ def qr_post(ownerid):
 
     try:
         with conn.cursor() as cursor:
+            cursor.execute("SELECT MAX(tablenumber) FROM storetable WHERE storeid = %s FOR UPDATE", (ownerid,))
+            last_table_number = cursor.fetchone()[0] or 0
+
             sql = """
-            INSERT INTO storetable (storeid, tablenumber, qr_code)
+            INSERT INTO storetable (storeid, tablenumber, qr_path)
             VALUES (%s, %s, %s)
             """
             successful_inserts = 0
-            for qr in qr_codes:
-                tableidx = qr.get('tableidx')
-                qr_code = qr.get('qr_code')
+            qr_urls = []
+            for i in range(1, table_count + 1):
+                table_number = last_table_number + i
+                qr_code_path = generate_qr_code(ownerid, table_number)
+                qr_url = f'http://{ELASTIC_IP}/qr/{os.path.basename(qr_code_path)}'
+                qr_urls.append(qr_url)
 
-                if not tableidx or not qr_code:
-                    return jsonify({'error': 'Table index and QR code are required for each entry'}), 400
-
-                cursor.execute(sql, (ownerid, tableidx, qr_code))
+                cursor.execute(sql, (ownerid, table_number, qr_url))  # URL을 바로 저장
                 successful_inserts += 1
 
             conn.commit()
-            return jsonify({'success': 'QR codes saved successfully', 'count': successful_inserts}), 201
+            return jsonify({'success': 'QR codes saved successfully', 'count': successful_inserts, 'qr_urls': qr_urls}), 201
     except Exception as e:
+        conn.rollback()
         return jsonify({'error': str(e)}), 500
     finally:
         dbclose(conn)
-
+        
 
 # 해당 가게의 QR코드들을 조회하는 라우트
 @app_store.route('/<string:ownerid>/qr', methods=['GET'])
@@ -178,15 +203,13 @@ def qr_get(ownerid):
 
     try:
         with conn.cursor(pymysql.cursors.DictCursor) as cursor:
-            # ownerid로 storetable에서 QR 코드 조회
-            cursor.execute("SELECT tablenumber, qr_code FROM storetable WHERE storeid = %s", (ownerid,))
+            cursor.execute("SELECT tablenumber, qr_path FROM storetable WHERE storeid = %s", (ownerid,))
             qr_codes = cursor.fetchall()
 
             if not qr_codes:
                 return jsonify({'error': 'No QR codes found for the given ownerid'}), 404
 
             return jsonify({'qr_codes': qr_codes}), 200
-
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     finally:
