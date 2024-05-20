@@ -117,7 +117,6 @@ def storemenu_get(ownerid):
         dbclose(conn)
 
 
-
 # qr_code를 담을 storetable 테이블을 직렬화
 class StoretableSchema(Schema):
     tableid = fields.Int(dump_only=True)
@@ -151,6 +150,7 @@ def qr_post(ownerid):
             INSERT INTO storetable (storeid, tablenumber, qr_code)
             VALUES (%s, %s, %s)
             """
+            successful_inserts = 0
             for qr in qr_codes:
                 tableidx = qr.get('tableidx')
                 qr_code = qr.get('qr_code')
@@ -159,13 +159,15 @@ def qr_post(ownerid):
                     return jsonify({'error': 'Table index and QR code are required for each entry'}), 400
 
                 cursor.execute(sql, (ownerid, tableidx, qr_code))
+                successful_inserts += 1
 
             conn.commit()
-            return jsonify({'success': 'QR codes saved successfully'}), 201
+            return jsonify({'success': 'QR codes saved successfully', 'count': successful_inserts}), 201
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     finally:
         dbclose(conn)
+
 
 # 해당 가게의 QR코드들을 조회하는 라우트
 @app_store.route('/<string:ownerid>/qr', methods=['GET'])

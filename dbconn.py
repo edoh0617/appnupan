@@ -3,9 +3,9 @@ import pymysql
 
 def dbcon():
     try:
-        conn = pymysql.connect(host='RDS 엔드포인트',
+        conn = pymysql.connect(host='appnupan.c7ogkao424wk.ap-northeast-2.rds.amazonaws.com',
                                user='admin',
-                               password='비밀번호',
+                               password='1q2w3e4r',
                                db='appnupan',
                                charset='utf8mb4')
                                
