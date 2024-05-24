@@ -1,5 +1,6 @@
 # 점주가 접근하는 라우트들을 모아둔 app_owner.py
 import pymysql
+
 from flask_cors import CORS
 from flask import Blueprint, jsonify, request
 from flask_bcrypt import Bcrypt
@@ -30,6 +31,7 @@ class OwnerSchema(Schema):
     def make_owner(self, data, **kwargs):
         data['ownerdigest'] = bcrypt.generate_password_hash(data['password']).decode('utf-8')
         return data
+
 
 owner_schema = OwnerSchema()
 

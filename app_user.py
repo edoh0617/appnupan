@@ -1,4 +1,5 @@
 # 앱 사용자의 회원가입, 로그인, ID 중복체크 라우트들을 모아둔 모듈 파일 app_user.py
+import pymysql
 from flask_cors import CORS
 from flask import Blueprint, jsonify, request
 from flask_bcrypt import Bcrypt
@@ -28,10 +29,13 @@ class UserSchema(Schema):
     usercontact = fields.String(validate=[validate.Length(max=45)])
 
 
-# 회원가입 라우트 실제로는 baseURL/user/regist
+# 회원가입을 위한 마쉬멜로 스키마 객체 생성
+user_schema = UserSchema()
+
+
+# 회원가입 라우트 실제로는 baseURL/user/regist (http://43.201.92.62/user/regist)
 @app_user.route('/register', methods=['POST'])
 def register_user():
-    user_schema = UserSchema()
     try:
         user_data = user_schema.load(request.json)
         userid = user_data['userid']
@@ -46,10 +50,13 @@ def register_user():
         registration = Registration(bcrypt)  # 여기서 Registration 인스턴스 생성 근데 bcrypt를 곁들인
         response = registration.register_user(user_data['userid'], user_data['password'], user_data['username'], user_data['usercontact'])
         return jsonify({'message': response}), 201
+    
     except ValidationError as err:
         return jsonify(err.messages), 400
+    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    
     finally:
         dbclose(conn)
 
@@ -72,6 +79,9 @@ def check_userid():
             return jsonify({'isAvailable': False, 'message': 'This userid is already taken'}), 200
         else:
             return jsonify({'isAvailable': True, 'message': 'This userid is available'}), 200
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
         
     finally:
         dbclose(conn)
@@ -99,6 +109,10 @@ def login_user():
                 return jsonify({'message': 'Login success!', 'username': username}), 200
 
         return jsonify({'error': 'Invalid credentials'}), 401
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
     finally:
         dbclose(conn)
+

@@ -5,6 +5,7 @@ from app_owner import app_owner, init_bcrypt
 from app_franchise import app_franchise
 from app_store import app_store
 from app_order import app_order
+from app_admin import app_admin
 
 
 # 앱서버 초기화
@@ -18,6 +19,7 @@ app.register_blueprint(app_owner, url_prefix='/owner')
 app.register_blueprint(app_franchise, url_prefix='/franchise')
 app.register_blueprint(app_store, url_prefix='/store')
 app.register_blueprint(app_order, url_prefix='/order')
+app.register_blueprint(app_admin, url_prefix='/admin')
 
 
 # Bcrypt 초기화

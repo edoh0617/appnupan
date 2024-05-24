@@ -1,6 +1,8 @@
+# 가게의 메뉴와 qr등록을 저장 및 조회하는 라우트들을 모아둔 모듈 파일 app_store.py
 import os
 import pymysql
 import qrcode
+
 from flask_cors import CORS
 from flask import Flask, Blueprint, jsonify, request, send_file
 from werkzeug.utils import secure_filename
@@ -53,6 +55,7 @@ def storemenu_post(ownerid):
     storename = request.values.get('storename')
     price = request.values.get('price')
     category = request.values.get('category')
+    description = request.values.get('description')
     menuimage = request.files.get('menuimage')
 
     if not menuimage:
@@ -77,10 +80,10 @@ def storemenu_post(ownerid):
     try:
         with conn.cursor() as cursor:
             sql = """
-            INSERT INTO storemenu (storeid, productname, storename, price, imageurl, category)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO storemenu (storeid, productname, storename, price, imageurl, category, description)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """
-            cursor.execute(sql, (ownerid, productname, storename, price, image_url, category))
+            cursor.execute(sql, (ownerid, productname, storename, price, image_url, category, description))
             conn.commit()
             return jsonify({'success': 'Menu item added successfully'}), 201
     except Exception as e:
@@ -116,12 +119,127 @@ def storemenu_get(ownerid):
         dbclose(conn)
 
 
+# 가게 메뉴 수정 라우트
+@app_store.route('/<string:productid>/menu', methods=['PUT'])
+def storemenu_update(productid):
+    productname = request.form.get('productname')
+    storename = request.form.get('storename')
+    price = request.form.get('price')
+    available = request.form.get('available')
+    category = request.form.get('category')
+    description = request.form.get('description')
+    new_menuimage = request.files.get('menuimage')
+
+    conn = dbcon()
+    if conn is None:
+        return jsonify({'error': 'Database connection failed'}), 500
+
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+            # 기존에 있던 메뉴인지 확인하기 동시에 이전 메뉴 이미지 경로 가져오기
+            cursor.execute("SELECT imageurl FROM storemenu WHERE productid = %s", (productid,))
+            menu_item = cursor.fetchone()
+            if not menu_item:
+                return jsonify({'error': 'Menu item not found'}), 404
+
+            old_imageurl = menu_item['imageurl']
+
+            # 업데이트할 필드들 준비
+            fields_to_update = []
+            values_to_update = []
+
+            # 새 이미지 저장 경로 설정
+            if new_menuimage and allowed_file(new_menuimage.filename):
+                # 기존 이미지 삭제
+                if old_imageurl:
+                    old_image_path = os.path.join('/home/ubuntu/appnupan/tmp', os.path.basename(old_imageurl))
+                    if os.path.exists(old_image_path):
+                        os.remove(old_image_path)
+
+                # 새 이미지 저장
+                new_filename = secure_filename(new_menuimage.filename)
+                new_filename = f"{productid}_{new_filename}"
+                save_path = os.path.join('/home/ubuntu/appnupan/tmp', new_filename)
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                new_menuimage.save(save_path)
+                new_image_url = f"http://{ELASTIC_IP}/images/{new_filename}"
+                fields_to_update.append("imageurl = %s")
+                values_to_update.append(new_image_url)
+
+            # 요청된 데이터에 맞게 필드 추가
+            for field, value in [('productname', productname), ('storename', storename), 
+                                 ('price', price), ('available', available), 
+                                 ('category', category), ('description', description)]:
+                if value is not None:
+                    fields_to_update.append(f"{field} = %s")
+                    values_to_update.append(value)
+
+            if not fields_to_update:
+                return jsonify({'error': 'No valid fields provided for update'}), 400
+
+            # SQL 쿼리 작성
+            query = f"UPDATE storemenu SET {', '.join(fields_to_update)} WHERE productid = %s"
+            values_to_update.append(productid)
+
+            # 업데이트 실행
+            cursor.execute(query, tuple(values_to_update))
+            conn.commit()
+
+            return jsonify({'success': 'Menu item updated successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    finally:
+        dbclose(conn)
+
+
+# 메뉴 삭제 라우트
+@app_store.route('/<string:productid>', methods=['DELETE'])
+def storemenu_delete(productid):
+    conn = dbcon()
+    if conn is None:
+        return jsonify({'error': 'Database connection failed'}), 500
+
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+            # 기존 메뉴 정보를 가져오기
+            cursor.execute("SELECT imageurl FROM storemenu WHERE productid = %s", (productid,))
+            menu_item = cursor.fetchone()
+            if not menu_item:
+                return jsonify({'error': 'Menu item not found'}), 404
+
+            image_url = menu_item['imageurl']
+
+            # 메뉴 삭제
+            cursor.execute("DELETE FROM storemenu WHERE productid = %s", (productid,))
+            conn.commit()
+
+            # 이미지 파일 삭제
+            if image_url:
+                image_path = os.path.join('/home/ubuntu/appnupan/tmp', os.path.basename(image_url))
+                if os.path.exists(image_path):
+                    os.remove(image_path)
+
+            return jsonify({'success': 'Menu item deleted successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    finally:
+        dbclose(conn)
+
+
+
+
+
 # qr_code를 담을 storetable 테이블을 직렬화
 class StoretableSchema(Schema):
     tableid = fields.Int(dump_only=True)
     storeid = fields.Str(validate=validate.Length(max=100))
     tablenumber = fields.Int(validate=validate.Range(min=1))
     qr_path = fields.Str(validate=validate.Length(max=255))
+    qr_code = fields.Str(validate=validate.Length(max=255))
 
 
 # 가게좌석마다 QR코드 생성을 위한 스키마 객체 생성
@@ -149,7 +267,7 @@ def generate_qr_code(ownerid, tablenumber):
     file_path = os.path.join(directory, filename)
     img.save(file_path)
     
-    return file_path  # 파일 경로만 반환
+    return file_path, qr_data  # 파일 경로와 QR 데이터를 반환
 
 
 # 좌석마다 qr코드 저장
@@ -171,18 +289,19 @@ def qr_post(ownerid):
             last_table_number = cursor.fetchone()[0] or 0
 
             sql = """
-            INSERT INTO storetable (storeid, tablenumber, qr_path)
-            VALUES (%s, %s, %s)
+            INSERT INTO storetable (storeid, tablenumber, qr_path, qr_code)
+            VALUES (%s, %s, %s, %s)
             """
             successful_inserts = 0
             qr_urls = []
             for i in range(1, table_count + 1):
                 table_number = last_table_number + i
-                qr_code_path = generate_qr_code(ownerid, table_number)
+                qr_code_path, qr_data = generate_qr_code(ownerid, table_number)  # 여기서 튜플을 받음
                 qr_url = f'http://{ELASTIC_IP}/qr/{os.path.basename(qr_code_path)}'
                 qr_urls.append(qr_url)
 
-                cursor.execute(sql, (ownerid, table_number, qr_url))  # URL을 바로 저장
+                # URL과 QR 데이터를 DB에 저장
+                cursor.execute(sql, (ownerid, table_number, qr_url, qr_data))
                 successful_inserts += 1
 
             conn.commit()
@@ -214,4 +333,5 @@ def qr_get(ownerid):
         return jsonify({'error': str(e)}), 500
     finally:
         dbclose(conn)
+
 
