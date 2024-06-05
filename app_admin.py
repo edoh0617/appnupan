@@ -1,5 +1,5 @@
 # 관리자가 사용자 정보를 조회하는 라우트들을 모아둔 app_admin.py
-# 이 모듈의 라우트들은 GET방식을 사용하지 않을거임
+# 이 오듈의 라우트들은 GET방식을 사용하지 않을거임
 import os
 import pymysql
 
@@ -142,7 +142,3 @@ def get_all_owners():
         dbclose(conn)
 
 
-# 특정 점주에 대한 정보를 조회하는 라우트
-@app_admin.route('/view/owner', methods=['POST'])
-def get_owner():
-    pass

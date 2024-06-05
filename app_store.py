@@ -2,6 +2,7 @@
 import os
 import pymysql
 import qrcode
+import logging
 
 from flask_cors import CORS
 from flask import Flask, Blueprint, jsonify, request, send_file
@@ -13,6 +14,11 @@ from dbconn import dbcon, dbclose
 
 app_store = Blueprint('store', __name__)
 CORS(app_store)
+
+
+# 로깅 설정
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 # 이미지 파일 허용 확장자와 크기 제한
@@ -73,6 +79,9 @@ def storemenu_post(ownerid):
 
     image_url = f"http://{ELASTIC_IP}/images/{filename}"
 
+    # 가격에서 콤마를 제거하여 저장
+    price = price.replace(',', '')
+
     conn = dbcon()
     if conn is None:
         return jsonify({'error': 'Database connection failed'}), 500
@@ -86,6 +95,7 @@ def storemenu_post(ownerid):
             cursor.execute(sql, (ownerid, productname, storename, price, image_url, category, description))
             conn.commit()
             return jsonify({'success': 'Menu item added successfully'}), 201
+            
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     finally:
@@ -122,41 +132,39 @@ def storemenu_get(ownerid):
 # 가게 메뉴 수정 라우트
 @app_store.route('/<string:productid>/menu', methods=['PUT'])
 def storemenu_update(productid):
-    productname = request.form.get('productname')
-    storename = request.form.get('storename')
-    price = request.form.get('price')
-    available = request.form.get('available')
-    category = request.form.get('category')
-    description = request.form.get('description')
+    logger.info("Received request to update menu item with product ID: %s", productid)
+    productname = request.values.get('productname')
+    storename = request.values.get('storename')
+    price = request.values.get('price')
+    available = request.values.get('available')
+    category = request.values.get('category')
+    description = request.values.get('description')
     new_menuimage = request.files.get('menuimage')
 
     conn = dbcon()
     if conn is None:
+        logger.error("Database connection failed")
         return jsonify({'error': 'Database connection failed'}), 500
 
     try:
         with conn.cursor(pymysql.cursors.DictCursor) as cursor:
-            # 기존에 있던 메뉴인지 확인하기 동시에 이전 메뉴 이미지 경로 가져오기
             cursor.execute("SELECT imageurl FROM storemenu WHERE productid = %s", (productid,))
             menu_item = cursor.fetchone()
             if not menu_item:
+                logger.error("Menu item not found with product ID: %s", productid)
                 return jsonify({'error': 'Menu item not found'}), 404
 
             old_imageurl = menu_item['imageurl']
 
-            # 업데이트할 필드들 준비
             fields_to_update = []
             values_to_update = []
 
-            # 새 이미지 저장 경로 설정
             if new_menuimage and allowed_file(new_menuimage.filename):
-                # 기존 이미지 삭제
                 if old_imageurl:
                     old_image_path = os.path.join('/home/ubuntu/appnupan/tmp', os.path.basename(old_imageurl))
                     if os.path.exists(old_image_path):
                         os.remove(old_image_path)
 
-                # 새 이미지 저장
                 new_filename = secure_filename(new_menuimage.filename)
                 new_filename = f"{productid}_{new_filename}"
                 save_path = os.path.join('/home/ubuntu/appnupan/tmp', new_filename)
@@ -166,32 +174,32 @@ def storemenu_update(productid):
                 fields_to_update.append("imageurl = %s")
                 values_to_update.append(new_image_url)
 
-            # 요청된 데이터에 맞게 필드 추가
             for field, value in [('productname', productname), ('storename', storename), 
-                                 ('price', price), ('available', available), 
+                                 ('price', price), ('available', 1 if available else 0), 
                                  ('category', category), ('description', description)]:
                 if value is not None:
                     fields_to_update.append(f"{field} = %s")
                     values_to_update.append(value)
 
             if not fields_to_update:
+                logger.error("No valid fields provided for update")
                 return jsonify({'error': 'No valid fields provided for update'}), 400
 
-            # SQL 쿼리 작성
             query = f"UPDATE storemenu SET {', '.join(fields_to_update)} WHERE productid = %s"
             values_to_update.append(productid)
 
-            # 업데이트 실행
             cursor.execute(query, tuple(values_to_update))
             conn.commit()
-
+            logger.info("Menu item updated successfully for product ID: %s", productid)
             return jsonify({'success': 'Menu item updated successfully'}), 200
 
     except Exception as e:
+        logger.error("Error updating menu item: %s", str(e))
         return jsonify({'error': str(e)}), 500
 
     finally:
         dbclose(conn)
+
 
 
 # 메뉴 삭제 라우트
@@ -231,6 +239,48 @@ def storemenu_delete(productid):
 
 
 
+# 가게의 카테고리를 저장하는 라우트
+@app_store.route('/<string:ownerid>/category', methods=['POST'])
+def post_categories(ownerid):
+    try:
+        data = request.get_json()
+        category = data.get('category')
+
+        if not category:
+            return jsonify({"error": "Category is required"}), 400
+        
+        conn = dbcon()
+        cursor = conn.cursor()
+        query = "INSERT INTO store_category (storeid, category) VALUES (%s, %s)"
+        cursor.execute(query, (ownerid, category))
+        conn.commit()
+        dbclose(conn)
+        
+        return jsonify({"message": "Category added successfully"}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# 가게의 카테고리를 반환하는 라우트
+@app_store.route('/<string:ownerid>/category', methods=['GET'])
+def get_categories(ownerid):
+    try:
+        conn = dbcon()
+        cursor = conn.cursor()
+        query = "SELECT category FROM store_category WHERE storeid = %s"
+        cursor.execute(query, (ownerid,))
+        categories = cursor.fetchall()
+        dbclose(conn)
+        
+        if categories:
+            return jsonify([category[0] for category in categories]), 200
+        else:
+            return jsonify({"message": "No categories found for this owner"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
 
 
 # qr_code를 담을 storetable 테이블을 직렬화
@@ -248,7 +298,7 @@ storetables_schema = StoretableSchema(many=True)
 
 
 def generate_qr_code(ownerid, tablenumber):
-    qr_data = f"{ownerid}-{tablenumber}"
+    qr_data = f"http://{ELASTIC_IP}/qr/_{ownerid}_{tablenumber}.png"
     qr = qrcode.QRCode(
         version=1,
         error_correction=qrcode.constants.ERROR_CORRECT_L,
@@ -263,7 +313,7 @@ def generate_qr_code(ownerid, tablenumber):
     if not os.path.exists(directory):
         os.makedirs(directory)
     
-    filename = f'{ownerid}_{tablenumber}.png'
+    filename = f'_{ownerid}_{tablenumber}.png'
     file_path = os.path.join(directory, filename)
     img.save(file_path)
     
