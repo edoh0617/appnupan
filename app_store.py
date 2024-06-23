@@ -5,7 +5,7 @@ import qrcode
 import logging
 
 from flask_cors import CORS
-from flask import Flask, Blueprint, jsonify, request, send_file
+from flask import Blueprint, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 from marshmallow import Schema, fields, validate
 
@@ -54,7 +54,7 @@ def allowed_file(filename):
 ELASTIC_IP = "43.201.92.62"
 
 
-# 가게 메뉴 등록하는 라우트
+# 가게메뉴 등록 라우트
 @app_store.route('/<string:ownerid>/menu', methods=['POST'])
 def storemenu_post(ownerid):
     productname = request.values.get('productname')
@@ -70,15 +70,6 @@ def storemenu_post(ownerid):
     if not allowed_file(menuimage.filename):
         return jsonify({'error': 'Unsupported file type'}), 400
 
-    filename = secure_filename(menuimage.filename)
-    # ownerid를 파일명에 추가하여 고유하게 만듦
-    filename = f"{ownerid}_{filename}"
-    save_path = os.path.join('/home/ubuntu/appnupan/tmp', filename)
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    menuimage.save(save_path)
-
-    image_url = f"http://{ELASTIC_IP}/images/{filename}"
-
     # 가격에서 콤마를 제거하여 저장
     price = price.replace(',', '')
 
@@ -88,16 +79,44 @@ def storemenu_post(ownerid):
 
     try:
         with conn.cursor() as cursor:
-            sql = """
-            INSERT INTO storemenu (storeid, productname, storename, price, imageurl, category, description)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            sql_insert = """
+            INSERT INTO storemenu (storeid, productname, storename, price, category, description)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """
-            cursor.execute(sql, (ownerid, productname, storename, price, image_url, category, description))
+            cursor.execute(sql_insert, (ownerid, productname, storename, price, category, description))
             conn.commit()
-            return jsonify({'success': 'Menu item added successfully'}), 201
-            
+
+            cursor.execute("SELECT LAST_INSERT_ID() AS productid")
+            result = cursor.fetchone()
+            productid = result[0]  # 튜플에서 첫 번째 요소로 접근
+
+            file_extension = menuimage.filename.rsplit('.', 1)[1].lower()
+            filename = secure_filename(f"{ownerid}_{productid}.{file_extension}")
+            save_path = os.path.join('/home/ubuntu/appnupan/tmp', filename)
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            menuimage.save(save_path)
+
+            image_url = f"http://{ELASTIC_IP}/images/{filename}"
+
+            sql_update = """
+            UPDATE storemenu SET imageurl = %s WHERE productid = %s
+            """
+            cursor.execute(sql_update, (image_url, productid))
+            conn.commit()
+
+            sql_store_category = """
+            INSERT INTO store_category (storeid, category)
+            VALUES (%s, %s)
+            ON DUPLICATE KEY UPDATE category = VALUES(category)
+            """
+            cursor.execute(sql_store_category, (ownerid, category))
+            conn.commit()
+
+            return jsonify({'success': 'Menu item added successfully', 'productid': productid}), 201
+
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error adding menu item: {str(e)}")
+        return jsonify({'error': 'Failed to add menu item', 'details': str(e)}), 500
     finally:
         dbclose(conn)
 
@@ -148,13 +167,14 @@ def storemenu_update(productid):
 
     try:
         with conn.cursor(pymysql.cursors.DictCursor) as cursor:
-            cursor.execute("SELECT imageurl FROM storemenu WHERE productid = %s", (productid,))
+            cursor.execute("SELECT storeid, imageurl FROM storemenu WHERE productid = %s", (productid,))
             menu_item = cursor.fetchone()
             if not menu_item:
                 logger.error("Menu item not found with product ID: %s", productid)
                 return jsonify({'error': 'Menu item not found'}), 404
 
             old_imageurl = menu_item['imageurl']
+            storeid = menu_item['storeid']
 
             fields_to_update = []
             values_to_update = []
@@ -165,14 +185,18 @@ def storemenu_update(productid):
                     if os.path.exists(old_image_path):
                         os.remove(old_image_path)
 
-                new_filename = secure_filename(new_menuimage.filename)
-                new_filename = f"{productid}_{new_filename}"
+                file_extension = new_menuimage.filename.rsplit('.', 1)[1].lower()
+                new_filename = secure_filename(f"{storeid}_{productid}.{file_extension}")
                 save_path = os.path.join('/home/ubuntu/appnupan/tmp', new_filename)
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
                 new_menuimage.save(save_path)
                 new_image_url = f"http://{ELASTIC_IP}/images/{new_filename}"
                 fields_to_update.append("imageurl = %s")
                 values_to_update.append(new_image_url)
+
+            # 가격에서 콤마를 제거하여 저장
+            if price:
+                price = price.replace(',', '')
 
             for field, value in [('productname', productname), ('storename', storename), 
                                  ('price', price), ('available', 1 if available else 0), 
@@ -199,7 +223,6 @@ def storemenu_update(productid):
 
     finally:
         dbclose(conn)
-
 
 
 # 메뉴 삭제 라우트
@@ -238,29 +261,6 @@ def storemenu_delete(productid):
         dbclose(conn)
 
 
-
-# 가게의 카테고리를 저장하는 라우트
-@app_store.route('/<string:ownerid>/category', methods=['POST'])
-def post_categories(ownerid):
-    try:
-        data = request.get_json()
-        category = data.get('category')
-
-        if not category:
-            return jsonify({"error": "Category is required"}), 400
-        
-        conn = dbcon()
-        cursor = conn.cursor()
-        query = "INSERT INTO store_category (storeid, category) VALUES (%s, %s)"
-        cursor.execute(query, (ownerid, category))
-        conn.commit()
-        dbclose(conn)
-        
-        return jsonify({"message": "Category added successfully"}), 201
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 # 가게의 카테고리를 반환하는 라우트
 @app_store.route('/<string:ownerid>/category', methods=['GET'])
 def get_categories(ownerid):
@@ -278,8 +278,6 @@ def get_categories(ownerid):
             return jsonify({"message": "No categories found for this owner"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
 
 
 
@@ -361,7 +359,7 @@ def qr_post(ownerid):
         return jsonify({'error': str(e)}), 500
     finally:
         dbclose(conn)
-        
+
 
 # 해당 가게의 QR코드들을 조회하는 라우트
 @app_store.route('/<string:ownerid>/qr', methods=['GET'])
@@ -383,5 +381,4 @@ def qr_get(ownerid):
         return jsonify({'error': str(e)}), 500
     finally:
         dbclose(conn)
-
 

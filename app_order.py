@@ -142,6 +142,7 @@ def scan_qr():
         dbclose(conn)
 
 
+# 결제 정보 저장 라우트
 @app_order.route('/payments', methods=['POST'])
 def order_payment():
     json_data = request.get_json()
@@ -158,7 +159,15 @@ def order_payment():
     order_details = data['order_details']
     userid = data.get('userid')
     orderid = data.get('orderid')
-    amount = data['order_details'].get('amount')  # order_details에서 amount 가져오기
+    merchant_uid = data.get('merchant_uid')
+    amount = order_details['amount']  # order_details에서 amount 추출
+    buyer_email = data.get('buyer_email')
+    buyer_name = data.get('buyer_name')
+    buyer_tel = data.get('buyer_tel')
+    buyer_addr = data.get('buyer_addr')
+    buyer_postcode = data.get('buyer_postcode')
+    pay_method = data.get('pay_method')
+    pg = data.get('pg')
 
     if not userid or not orderid:
         logger.error("User ID and Order ID are required")
@@ -206,10 +215,23 @@ def order_payment():
 
             # 주문 상태 업데이트 (결제 완료로 변경)
             query_update_order = """
-                UPDATE orders SET order_status = %s WHERE orderid = %s
+                UPDATE orders SET order_status = %s, ordertime = %s WHERE orderid = %s
             """
-            cursor.execute(query_update_order, (1, orderid))
+            cursor.execute(query_update_order, (1, merchant_uid, orderid))
             logger.info(f"Order status updated for order ID: {orderid}")
+
+            # 결제 정보 저장
+            query_payment = """
+                INSERT INTO order_payments (
+                    orderid, merchant_uid, amount, buyer_email, buyer_name, buyer_tel, 
+                    buyer_addr, buyer_postcode, pay_method, pg
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            cursor.execute(query_payment, (
+                orderid, merchant_uid, amount, buyer_email, buyer_name, buyer_tel, 
+                buyer_addr, buyer_postcode, pay_method, pg
+            ))
+            logger.info("Payment information saved")
 
             # 트랜잭션 커밋
             conn.commit()
@@ -226,7 +248,6 @@ def order_payment():
     finally:
         dbclose(conn)
         logger.info("Database connection closed")
-
 
 
 class StoreServeListSchema(Schema):
@@ -277,14 +298,27 @@ def store_serve_list():
                 cursor.execute(query_get_order_details, (orderid,))
                 order_details = cursor.fetchall()
 
+                # order_payments 테이블에서 해당 orderid의 결제 정보 조회
+                query_get_payment_info = """
+                    SELECT pg, pay_method FROM order_payments WHERE orderid = %s
+                """
+                cursor.execute(query_get_payment_info, (orderid,))
+                payment_info = cursor.fetchone()
+
                 if order_details:
-                    order_details_list.append({
+                    order_info = {
                         "orderid": orderid,
                         "tablenumber": tablenumber,
                         "staffcall": staffcall,
                         "ordertime": ordertime,
                         "order_details": order_details
-                    })
+                    }
+                    if payment_info:
+                        order_info.update({
+                            "pg": payment_info['pg'],
+                            "pay_method": payment_info['pay_method']
+                        })
+                    order_details_list.append(order_info)
 
             return jsonify(order_details_list), 200
 

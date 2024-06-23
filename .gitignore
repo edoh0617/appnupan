@@ -8,11 +8,14 @@ dbconn.py
 # Dockerfile 파일 무시
 Dockerfile
 
-# nginx.conf 파일 무시
-nginx.conf
+# # nginx.conf 파일 무시
+# nginx.conf
 
 # .env 파일 무시
 .env
 
 # practice.py 파일 무시
 practice.py
+
+# # systemd 서비스 내용 무시
+# appnupan.service

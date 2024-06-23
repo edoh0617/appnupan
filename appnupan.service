@@ -1,0 +1,15 @@
+### /etc/systemd/system/appnupan.service ###
+
+[Unit]
+Description=Gunicorn instance to serve appnupan
+After=network.target
+
+[Service]
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/appnupan
+Environment="PATH=/home/ubuntu/appnupan/anp/bin"
+ExecStart=/home/ubuntu/appnupan/anp/bin/gunicorn --workers 3 --bind 0.0.0.0:8000 runserver:app
+
+[Install]
+WantedBy=multi-user.target
